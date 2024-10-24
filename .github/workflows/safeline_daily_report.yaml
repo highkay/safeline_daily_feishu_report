@@ -1,0 +1,32 @@
+name: safeline daily report
+
+on:
+  push:
+    branches:
+      - main  # 仅在推送到 main 分支时触发
+  schedule:
+    - cron: '59 23 * * *'
+
+jobs:
+  safeline-job:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get data and report
+        run: |
+          response=$(curl -X GET "${{ secrets.WAF_HOST }}/api/stat/basic/attack" -H "X-SLCE-API-TOKEN: ${{ secrets.WAF_TOKEN }}")
+          block=$(echo $response | jq '.data.intercept.block')
+          attack_ip=$(echo $response | jq '.data.attack_ip')
+          response=$(curl -X GET "${{ secrets.WAF_HOST }}/api/stat/basic/error_status_code" -H "X-SLCE-API-TOKEN: ${{ secrets.WAF_TOKEN }}")
+          error_4xx=$(echo $response | jq '.data.error_4xx')
+          error_5xx=$(echo $response | jq '.data.error_5xx')
+          total=$(echo $response | jq '.data.total')
+          begin_time=$(date -d 'yesterday 23:59:00 +08:00' +%s)
+          end_time=$(date -d 'today 23:59:00 +08:00' +%s)
+          response=$(curl -X GET "${{ secrets.WAF_HOST }}/api/stat/advance/access?begin_time=${begin_time}&end_time=${end_time}" -H "X-SLCE-API-TOKEN: ${{ secrets.WAF_TOKEN }}")
+          access=$(echo $response | jq '.data.access')
+          session=$(echo $response | jq '.data.session')
+          ip=$(echo $response | jq '.data.ip')
+          content="今日统计\n拦截总数：${block} \n4xx错误总数：${error_4xx} \n5xx错误总数：${error_5xx} \n总访问量：${total} \n会话总数：${session} \nIP总数：${ip} \n攻击IP总数：${attack_ip} \n访问总数：${access}"
+          curl -X POST -H "Content-Type: application/json" \
+            -d "{\"msg_type\":\"text\",\"content\":{\"text\":\"$content\"}}" \
+            ${{ secrets.FEISHU_URL }}
