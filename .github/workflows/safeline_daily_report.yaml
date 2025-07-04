@@ -3,27 +3,35 @@ name: Safeline Daily Report
 on:
   push:
     branches:
-      - main # 仅在推送到 main 分支时触发
+      - main
   schedule:
-    # 北京时间每天 23:59 运行 (UTC 15:59)
-    - cron: '59 23 * * *'
+    # cron 表达式使用 UTC 时间。'59 15 * * *' 对应 UTC 15:59，即北京时间 23:59。
+    - cron: '59 15 * * *'
 
 jobs:
   safeline-job:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Set Time Range & Fetch Data
+      - name: 1. Fetch WAF Data
         id: fetch_data
         run: |
           # 设置统计时间范围 (过去24小时)
-          # 注意: GitHub Actions 使用 UTC 时间, cron 需要相应调整
           begin_time=$(date -u -d 'yesterday 16:00:00' +%s)
           end_time=$(date -u -d 'today 15:59:59' +%s)
           report_date=$(date -u -d 'today' +"%Y年%m月%d日")
           echo "report_date=${report_date}" >> $GITHUB_ENV
           
           # --- 获取攻击统计 ---
-          attack_json=$(curl -s -X GET "${{ secrets.WAF_HOST }}/api/stat/basic/attack" -H "X-SLCE-API-TOKEN: ${{ secrets.WAF_TOKEN }}")
+          echo "Fetching attack stats..."
+          attack_json=$(curl --fail -s -X GET "${{ secrets.WAF_HOST }}/api/stat/basic/attack" -H "X-SLCE-API-TOKEN: ${{ secrets.WAF_TOKEN }}")
+          
+          echo "DEBUG: Attack API Response: [${attack_json}]"
+          # 检查返回内容是否为空或无效JSON
+          if [[ -z "$attack_json" || ! $(echo "$attack_json" | jq -e '.data.intercept' > /dev/null) ]]; then
+            echo "::error::Failed to fetch or parse attack stats. Response was empty or invalid."
+            exit 1 # 失败则中止
+          fi
+          # 检查通过后才解析和导出
           echo "block=$(echo $attack_json | jq '.data.intercept.block')" >> $GITHUB_ENV
           echo "rate_limit=$(echo $attack_json | jq '.data.intercept.rate_limit')" >> $GITHUB_ENV
           echo "challenge=$(echo $attack_json | jq '.data.intercept.challenge')" >> $GITHUB_ENV
@@ -31,19 +39,33 @@ jobs:
           echo "attack_ip=$(echo $attack_json | jq '.data.attack_ip')" >> $GITHUB_ENV
 
           # --- 获取错误码统计 ---
-          error_json=$(curl -s -X GET "${{ secrets.WAF_HOST }}/api/stat/basic/error_status_code" -H "X-SLCE-API-TOKEN: ${{ secrets.WAF_TOKEN }}")
+          echo "Fetching error code stats..."
+          error_json=$(curl --fail -s -X GET "${{ secrets.WAF_HOST }}/api/stat/basic/error_status_code" -H "X-SLCE-API-TOKEN: ${{ secrets.WAF_TOKEN }}")
+          
+          echo "DEBUG: Error API Response: [${error_json}]"
+          if [[ -z "$error_json" || ! $(echo "$error_json" | jq -e '.data' > /dev/null) ]]; then
+            echo "::error::Failed to fetch or parse error stats. Response was empty or invalid."
+            exit 1 # 失败则中止
+          fi
           echo "error_4xx=$(echo $error_json | jq '.data.error_4xx')" >> $GITHUB_ENV
           echo "error_5xx=$(echo $error_json | jq '.data.error_5xx')" >> $GITHUB_ENV
 
           # --- 获取访问统计 ---
-          access_json=$(curl -s -X GET "${{ secrets.WAF_HOST }}/api/stat/advance/access?begin_time=${begin_time}&end_time=${end_time}" -H "X-SLCE-API-TOKEN: ${{ secrets.WAF_TOKEN }}")
+          echo "Fetching access stats..."
+          access_json=$(curl --fail -s -X GET "${{ secrets.WAF_HOST }}/api/stat/advance/access?begin_time=${begin_time}&end_time=${end_time}" -H "X-SLCE-API-TOKEN: ${{ secrets.WAF_TOKEN }}")
+          
+          echo "DEBUG: Access API Response: [${access_json}]"
+          if [[ -z "$access_json" || ! $(echo "$access_json" | jq -e '.data' > /dev/null) ]]; then
+            echo "::error::Failed to fetch or parse access stats. Response was empty or invalid."
+            exit 1 # 失败则中止
+          fi
           echo "access=$(echo $access_json | jq '.data.access')" >> $GITHUB_ENV
           echo "session=$(echo $access_json | jq '.data.session')" >> $GITHUB_ENV
           echo "ip=$(echo $access_json | jq '.data.ip')" >> $GITHUB_ENV
 
       - name: 2. Send Report to Feishu
+        # 此步骤仅在步骤1成功时运行 (这是GitHub Actions的默认行为)
         run: |
-          # 使用heredoc构建飞书卡片消息JSON, 简洁且无需转义
           payload=$(cat <<EOF
           {
             "msg_type": "interactive",
@@ -59,102 +81,33 @@ jobs:
                 {
                   "tag": "div",
                   "fields": [
-                    {
-                      "is_short": true,
-                      "text": {
-                        "tag": "lark_md",
-                        "content": "**总访问量 (PV):**\n${{ env.access }}"
-                      }
-                    },
-                    {
-                      "is_short": true,
-                      "text": {
-                        "tag": "lark_md",
-                        "content": "**独立IP数 (UV):**\n${{ env.ip }}"
-                      }
-                    }
+                    { "is_short": true, "text": { "tag": "lark_md", "content": "**总访问量 (PV):**\n${{ env.access }}" } },
+                    { "is_short": true, "text": { "tag": "lark_md", "content": "**独立IP数 (UV):**\n${{ env.ip }}" } }
                   ]
                 },
-                {
-                  "tag": "hr"
-                },
+                { "tag": "hr" },
                 {
                   "tag": "div",
                   "fields": [
-                    {
-                      "is_short": true,
-                      "text": {
-                        "tag": "lark_md",
-                        "content": "**拦截总数:**\n${{ env.block }}"
-                      }
-                    },
-                    {
-                      "is_short": true,
-                      "text": {
-                        "tag": "lark_md",
-                        "content": "**攻击IP数:**\n${{ env.attack_ip }}"
-                      }
-                    },
-                    {
-                      "is_short": false,
-                      "text": {
-                        "tag": "lark_md",
-                        "content": ""
-                      }
-                    },
-                    {
-                      "is_short": true,
-                      "text": {
-                        "tag": "lark_md",
-                        "content": "**速率限制:** ${{ env.rate_limit }}"
-                      }
-                    },
-                    {
-                      "is_short": true,
-                      "text": {
-                        "tag": "lark_md",
-                        "content": "**人机挑战:** ${{ env.challenge }}"
-                      }
-                    },
-                    {
-                      "is_short": true,
-                      "text": {
-                        "tag": "lark_md",
-                        "content": "**离线封禁:** ${{ env.offline }}"
-                      }
-                    }
+                    { "is_short": true, "text": { "tag": "lark_md", "content": "**拦截总数:**\n${{ env.block }}" } },
+                    { "is_short": true, "text": { "tag": "lark_md", "content": "**攻击IP数:**\n${{ env.attack_ip }}" } },
+                    { "is_short": false, "text": { "tag": "lark_md", "content": "" } },
+                    { "is_short": true, "text": { "tag": "lark_md", "content": "**速率限制:** ${{ env.rate_limit }}" } },
+                    { "is_short": true, "text": { "tag": "lark_md", "content": "**人机挑战:** ${{ env.challenge }}" } },
+                    { "is_short": true, "text": { "tag": "lark_md", "content": "**离线封禁:** ${{ env.offline }}" } }
                   ]
                 },
-                {
-                  "tag": "hr"
-                },
+                { "tag": "hr" },
                 {
                   "tag": "div",
                   "fields": [
-                    {
-                      "is_short": true,
-                      "text": {
-                        "tag": "lark_md",
-                        "content": "**4xx 错误数:**\n${{ env.error_4xx }}"
-                      }
-                    },
-                    {
-                      "is_short": true,
-                      "text": {
-                        "tag": "lark_md",
-                        "content": "**5xx 错误数:**\n${{ env.error_5xx }}"
-                      }
-                    }
+                    { "is_short": true, "text": { "tag": "lark_md", "content": "**4xx 错误数:**\n${{ env.error_4xx }}" } },
+                    { "is_short": true, "text": { "tag": "lark_md", "content": "**5xx 错误数:**\n${{ env.error_5xx }}" } }
                   ]
                 },
                 {
                   "tag": "note",
-                  "elements": [
-                    {
-                      "tag": "plain_text",
-                      "content": "报告生成于: $(date -u)"
-                    }
-                  ]
+                  "elements": [ { "tag": "plain_text", "content": "报告生成于: $(date -u) UTC" } ]
                 }
               ]
             }
@@ -162,6 +115,4 @@ jobs:
           EOF
           )
           
-          curl -X POST -H "Content-Type: application/json" \
-            -d "$payload" \
-            ${{ secrets.FEISHU_URL }}
+          curl -X POST -H "Content-Type: application/json" -d "$payload" ${{ secrets.FEISHU_URL }}
