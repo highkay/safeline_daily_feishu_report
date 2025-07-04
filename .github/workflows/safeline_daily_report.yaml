@@ -21,47 +21,57 @@ jobs:
           report_date=$(date -u -d 'today' +"%Y年%m月%d日")
           echo "report_date=${report_date}" >> $GITHUB_ENV
           
+          # Función para normalizar la respuesta de la API (maneja tanto objetos como arrays)
+          normalize_json() {
+            # Intenta acceder al primer elemento del array; si falla, usa el objeto original.
+            echo "$1" | jq -c '(.[0] // .)'
+          }
+
           # --- Obtener estadísticas de ataques ---
           echo "Fetching attack stats..."
-          attack_json=$(curl --fail -s -X GET "${{ secrets.WAF_HOST }}/api/stat/basic/attack" -H "X-SLCE-API-TOKEN: ${{ secrets.WAF_TOKEN }}")
+          attack_response=$(curl --fail -s -X GET "${{ secrets.WAF_HOST }}/api/stat/basic/attack" -H "X-SLCE-API-TOKEN: ${{ secrets.WAF_TOKEN }}")
           
-          echo "DEBUG: Attack API Response: [${attack_json}]"
-          # CORRECCIÓN: Usar un filtro jq robusto para manejar tanto objetos como arrays
-          if [[ -z "$attack_json" || ! $(echo "$attack_json" | jq -e '(if type == "array" then .[0] else . end) | .data.intercept' > /dev/null) ]]; then
-            echo "::error::Failed to fetch or parse attack stats. Response was empty or invalid."
+          echo "DEBUG: Attack API Response: [${attack_response}]"
+          if [[ -z "$attack_response" ]]; then
+            echo "::error::Failed to fetch attack stats. Response was empty."
             exit 1
           fi
-          # CORRECCIÓN: Aplicar el filtro robusto a todas las consultas jq
-          echo "block=$(echo "$attack_json" | jq -r '(if type == "array" then .[0] else . end).data.intercept.block')" >> $GITHUB_ENV
-          echo "rate_limit=$(echo "$attack_json" | jq -r '(if type == "array" then .[0] else . end).data.intercept.rate_limit')" >> $GITHUB_ENV
-          echo "challenge=$(echo "$attack_json" | jq -r '(if type == "array" then .[0] else . end).data.intercept.challenge')" >> $GITHUB_ENV
-          echo "offline=$(echo "$attack_json" | jq -r '(if type == "array" then .[0] else . end).data.intercept.offline')" >> $GITHUB_ENV
-          echo "attack_ip=$(echo "$attack_json" | jq -r '(if type == "array" then .[0] else . end).data.attack_ip')" >> $GITHUB_ENV
+          attack_json=$(normalize_json "$attack_response")
+          
+          echo "block=$(echo "$attack_json" | jq -r '.data.intercept.block')" >> $GITHUB_ENV
+          echo "rate_limit=$(echo "$attack_json" | jq -r '.data.intercept.rate_limit')" >> $GITHUB_ENV
+          echo "challenge=$(echo "$attack_json" | jq -r '.data.intercept.challenge')" >> $GITHUB_ENV
+          echo "offline=$(echo "$attack_json" | jq -r '.data.intercept.offline')" >> $GITHUB_ENV
+          echo "attack_ip=$(echo "$attack_json" | jq -r '.data.attack_ip')" >> $GITHUB_ENV
 
           # --- Obtener estadísticas de códigos de error ---
           echo "Fetching error code stats..."
-          error_json=$(curl --fail -s -X GET "${{ secrets.WAF_HOST }}/api/stat/basic/error_status_code" -H "X-SLCE-API-TOKEN: ${{ secrets.WAF_TOKEN }}")
+          error_response=$(curl --fail -s -X GET "${{ secrets.WAF_HOST }}/api/stat/basic/error_status_code" -H "X-SLCE-API-TOKEN: ${{ secrets.WAF_TOKEN }}")
           
-          echo "DEBUG: Error API Response: [${error_json}]"
-          if [[ -z "$error_json" || ! $(echo "$error_json" | jq -e '(if type == "array" then .[0] else . end) | .data' > /dev/null) ]]; then
-            echo "::error::Failed to fetch or parse error stats. Response was empty or invalid."
+          echo "DEBUG: Error API Response: [${error_response}]"
+          if [[ -z "$error_response" ]]; then
+            echo "::error::Failed to fetch error stats. Response was empty."
             exit 1
           fi
-          echo "error_4xx=$(echo "$error_json" | jq -r '(if type == "array" then .[0] else . end).data.error_4xx')" >> $GITHUB_ENV
-          echo "error_5xx=$(echo "$error_json" | jq -r '(if type == "array" then .[0] else . end).data.error_5xx')" >> $GITHUB_ENV
+          error_json=$(normalize_json "$error_response")
+
+          echo "error_4xx=$(echo "$error_json" | jq -r '.data.error_4xx')" >> $GITHUB_ENV
+          echo "error_5xx=$(echo "$error_json" | jq -r '.data.error_5xx')" >> $GITHUB_ENV
 
           # --- Obtener estadísticas de acceso ---
           echo "Fetching access stats..."
-          access_json=$(curl --fail -s -X GET "${{ secrets.WAF_HOST }}/api/stat/advance/access?begin_time=${begin_time}&end_time=${end_time}" -H "X-SLCE-API-TOKEN: ${{ secrets.WAF_TOKEN }}")
+          access_response=$(curl --fail -s -X GET "${{ secrets.WAF_HOST }}/api/stat/advance/access?begin_time=${begin_time}&end_time=${end_time}" -H "X-SLCE-API-TOKEN: ${{ secrets.WAF_TOKEN }}")
           
-          echo "DEBUG: Access API Response: [${access_json}]"
-          if [[ -z "$access_json" || ! $(echo "$access_json" | jq -e '(if type == "array" then .[0] else . end) | .data' > /dev/null) ]]; then
-            echo "::error::Failed to fetch or parse access stats. Response was empty or invalid."
+          echo "DEBUG: Access API Response: [${access_response}]"
+          if [[ -z "$access_response" ]]; then
+            echo "::error::Failed to fetch access stats. Response was empty."
             exit 1
           fi
-          echo "access=$(echo "$access_json" | jq -r '(if type == "array" then .[0] else . end).data.access')" >> $GITHUB_ENV
-          echo "session=$(echo "$access_json" | jq -r '(if type == "array" then .[0] else . end).data.session')" >> $GITHUB_ENV
-          echo "ip=$(echo "$access_json" | jq -r '(if type == "array" then .[0] else . end).data.ip')" >> $GITHUB_ENV
+          access_json=$(normalize_json "$access_response")
+          
+          echo "access=$(echo "$access_json" | jq -r '.data.access')" >> $GITHUB_ENV
+          echo "session=$(echo "$access_json" | jq -r '.data.session')" >> $GITHUB_ENV
+          echo "ip=$(echo "$access_json" | jq -r '.data.ip')" >> $GITHUB_ENV
 
       - name: 2. Send Report to Feishu
         run: |
