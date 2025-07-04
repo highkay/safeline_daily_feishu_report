@@ -26,17 +26,17 @@ jobs:
           attack_json=$(curl --fail -s -X GET "${{ secrets.WAF_HOST }}/api/stat/basic/attack" -H "X-SLCE-API-TOKEN: ${{ secrets.WAF_TOKEN }}")
           
           echo "DEBUG: Attack API Response: [${attack_json}]"
-          # 检查返回内容是否为空或无效JSON
-          if [[ -z "$attack_json" || ! $(echo "$attack_json" | jq -e '.data.intercept' > /dev/null) ]]; then
+          # 修正：在 jq 查询中增加 .[0] 来处理数组结构
+          if [[ -z "$attack_json" || ! $(echo "$attack_json" | jq -e '.[0].data.intercept' > /dev/null) ]]; then
             echo "::error::Failed to fetch or parse attack stats. Response was empty or invalid."
-            exit 1 # 失败则中止
+            exit 1
           fi
-          # 检查通过后才解析和导出
-          echo "block=$(echo $attack_json | jq '.data.intercept.block')" >> $GITHUB_ENV
-          echo "rate_limit=$(echo $attack_json | jq '.data.intercept.rate_limit')" >> $GITHUB_ENV
-          echo "challenge=$(echo $attack_json | jq '.data.intercept.challenge')" >> $GITHUB_ENV
-          echo "offline=$(echo $attack_json | jq '.data.intercept.offline')" >> $GITHUB_ENV
-          echo "attack_ip=$(echo $attack_json | jq '.data.attack_ip')" >> $GITHUB_ENV
+          # 修正：在所有 jq 查询中增加 .[0]
+          echo "block=$(echo $attack_json | jq '.[0].data.intercept.block')" >> $GITHUB_ENV
+          echo "rate_limit=$(echo $attack_json | jq '.[0].data.intercept.rate_limit')" >> $GITHUB_ENV
+          echo "challenge=$(echo $attack_json | jq '.[0].data.intercept.challenge')" >> $GITHUB_ENV
+          echo "offline=$(echo $attack_json | jq '.[0].data.intercept.offline')" >> $GITHUB_ENV
+          echo "attack_ip=$(echo $attack_json | jq '.[0].data.attack_ip')" >> $GITHUB_ENV
 
           # --- 获取错误码统计 ---
           echo "Fetching error code stats..."
@@ -45,7 +45,7 @@ jobs:
           echo "DEBUG: Error API Response: [${error_json}]"
           if [[ -z "$error_json" || ! $(echo "$error_json" | jq -e '.data' > /dev/null) ]]; then
             echo "::error::Failed to fetch or parse error stats. Response was empty or invalid."
-            exit 1 # 失败则中止
+            exit 1
           fi
           echo "error_4xx=$(echo $error_json | jq '.data.error_4xx')" >> $GITHUB_ENV
           echo "error_5xx=$(echo $error_json | jq '.data.error_5xx')" >> $GITHUB_ENV
@@ -57,38 +57,30 @@ jobs:
           echo "DEBUG: Access API Response: [${access_json}]"
           if [[ -z "$access_json" || ! $(echo "$access_json" | jq -e '.data' > /dev/null) ]]; then
             echo "::error::Failed to fetch or parse access stats. Response was empty or invalid."
-            exit 1 # 失败则中止
+            exit 1
           fi
           echo "access=$(echo $access_json | jq '.data.access')" >> $GITHUB_ENV
           echo "session=$(echo $access_json | jq '.data.session')" >> $GITHUB_ENV
           echo "ip=$(echo $access_json | jq '.data.ip')" >> $GITHUB_ENV
 
       - name: 2. Send Report to Feishu
-        # 此步骤仅在步骤1成功时运行 (这是GitHub Actions的默认行为)
         run: |
           payload=$(cat <<EOF
           {
             "msg_type": "interactive",
             "card": {
               "header": {
-                "title": {
-                  "tag": "plain_text",
-                  "content": "🛡️ 长亭 WAF 每日安全简报 (${{ env.report_date }})"
-                },
+                "title": { "tag": "plain_text", "content": "🛡️ 长亭 WAF 每日安全简报 (${{ env.report_date }})" },
                 "template": "blue"
               },
               "elements": [
-                {
-                  "tag": "div",
-                  "fields": [
+                { "tag": "div", "fields": [
                     { "is_short": true, "text": { "tag": "lark_md", "content": "**总访问量 (PV):**\n${{ env.access }}" } },
                     { "is_short": true, "text": { "tag": "lark_md", "content": "**独立IP数 (UV):**\n${{ env.ip }}" } }
                   ]
                 },
                 { "tag": "hr" },
-                {
-                  "tag": "div",
-                  "fields": [
+                { "tag": "div", "fields": [
                     { "is_short": true, "text": { "tag": "lark_md", "content": "**拦截总数:**\n${{ env.block }}" } },
                     { "is_short": true, "text": { "tag": "lark_md", "content": "**攻击IP数:**\n${{ env.attack_ip }}" } },
                     { "is_short": false, "text": { "tag": "lark_md", "content": "" } },
@@ -98,17 +90,12 @@ jobs:
                   ]
                 },
                 { "tag": "hr" },
-                {
-                  "tag": "div",
-                  "fields": [
+                { "tag": "div", "fields": [
                     { "is_short": true, "text": { "tag": "lark_md", "content": "**4xx 错误数:**\n${{ env.error_4xx }}" } },
                     { "is_short": true, "text": { "tag": "lark_md", "content": "**5xx 错误数:**\n${{ env.error_5xx }}" } }
                   ]
                 },
-                {
-                  "tag": "note",
-                  "elements": [ { "tag": "plain_text", "content": "报告生成于: $(date -u) UTC" } ]
-                }
+                { "tag": "note", "elements": [ { "tag": "plain_text", "content": "报告生成于: $(date -u) UTC" } ] }
               ]
             }
           }
